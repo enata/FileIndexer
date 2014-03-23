@@ -1,13 +1,13 @@
-using System;
-using System.IO;
 using FileIndexer.Core;
 using FileIndexer.Core.Interfaces;
+using System;
+using System.IO;
 
 namespace FileIndexer.FileSystemManagement
 {
     public sealed class FileTree :IFileManager
     {
-        private readonly FileSystemNode _root = new FileSystemNode(string.Empty, null, false);
+        private readonly FileSystemNode _root = new FileSystemNode(string.Empty, false);
         private readonly object _syncRoot = new object();
 
         public FileTree()
@@ -28,12 +28,13 @@ namespace FileIndexer.FileSystemManagement
         {
             if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException();
 
+            var normalizedPath = path.ToLower();
             lock (_syncRoot)
             {
                 FileSystemNode destination;
-                TryReachPath(path, true, out destination);
+                TryReachPath(normalizedPath, true, out destination);
                 destination.MonitorFolder = true;
-                BuildInnerFolders(path, destination);
+                BuildInnerFolders(normalizedPath, destination);
             }
         }
 
@@ -41,8 +42,7 @@ namespace FileIndexer.FileSystemManagement
         {
             if (string.IsNullOrWhiteSpace(filePath)) throw new ArgumentException();
 
-            var fileDirectory = GetFileDirectory(filePath);
-
+            var fileDirectory = GetFileDirectory(filePath.ToLower());
             lock (_syncRoot)
             {
                 FileSystemNode parentDirectory;
@@ -55,11 +55,12 @@ namespace FileIndexer.FileSystemManagement
         {
             if (string.IsNullOrWhiteSpace(directoryPath)) throw new ArgumentException();
 
+            var normalizedPath = directoryPath.ToLower();
             FileSystemNode directoryToRemove;
             lock (_syncRoot)
             {
-                
-                if (!TryReachPath(directoryPath, false, out directoryToRemove))
+
+                if (!TryReachPath(normalizedPath, false, out directoryToRemove))
                     return false;
             }
 
@@ -70,13 +71,16 @@ namespace FileIndexer.FileSystemManagement
 
         public bool TryRemoveFile(string filePath)
         {
-            var fileDirectory = GetFileDirectory(filePath);
+            if (string.IsNullOrWhiteSpace(filePath)) throw new ArgumentException();
+
+            var normalizedPath = filePath.ToLower();
+            var fileDirectory = GetFileDirectory(normalizedPath);
             lock (_syncRoot)
             {
                 FileSystemNode parentDirectory;
                 if (!TryReachPath(fileDirectory, false, out parentDirectory))
                     return false;
-                return parentDirectory.StopMonitoringFile(filePath);
+                return parentDirectory.StopMonitoringFile(normalizedPath);
             }
         }
 

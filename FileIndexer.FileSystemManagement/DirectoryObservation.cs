@@ -1,7 +1,9 @@
+using System;
 using FileIndexer.Core;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 
 namespace FileIndexer.FileSystemManagement
 {
@@ -11,6 +13,7 @@ namespace FileIndexer.FileSystemManagement
     internal sealed class DirectoryObservation
     {
         
+
         private const string TxtExtension = "*.txt"; // TODO: move into settings
 
         private readonly FileSystemWatcher _fileWatcher; // monitors files changes
@@ -18,11 +21,12 @@ namespace FileIndexer.FileSystemManagement
 
         private readonly HashSet<string> _files = new HashSet<string>();
 
-        //TODO: introduce global synchronization point, to synchronize events propagated through file tree structure
-        private readonly object _syncRoot = new object();
+        private readonly ReaderWriterLockSlim _globalSynLock; // to synchronize file tree global changes
+        private readonly object _syncRoot = new object(); // to keep local integrity
 
-        public DirectoryObservation(string directoryPath)
+        public DirectoryObservation(string directoryPath, ReaderWriterLockSlim globalSynLock)
         {
+            _globalSynLock = globalSynLock;
             _fileWatcher = CreateFileWatcher(directoryPath, NotifyFilters.FileName|NotifyFilters.LastWrite);
             _fileWatcher.Filter = TxtExtension;
             _directoryWatcher = CreateFileWatcher(directoryPath, NotifyFilters.DirectoryName);
@@ -112,30 +116,31 @@ namespace FileIndexer.FileSystemManagement
 
         private void DirectoryWatcherOnRenamed(object sender, RenamedEventArgs renamedEventArgs)
         {
+            _globalSynLock.EnterWriteLock();
             var dirRenamedHandlers = DirectoryRenamed;
-            if(dirRenamedHandlers != null)
-                lock (_syncRoot)
-                {
-                    dirRenamedHandlers(renamedEventArgs.OldName, renamedEventArgs.Name);
-                }
+            if (dirRenamedHandlers != null)
+            {
+                dirRenamedHandlers(renamedEventArgs.OldName.ToLower(), renamedEventArgs.Name.ToLower());
+            }
+            _globalSynLock.ExitWriteLock();
         }
 
         private void DirectoryWatcherOnDeleted(object sender, FileSystemEventArgs fileSystemEventArgs)
         {
+            _globalSynLock.EnterReadLock();
             var dirRemovedHandlers = DirectoryRemoved;
             if(dirRemovedHandlers != null)
-                lock (_syncRoot)
-                {
-                    dirRemovedHandlers(fileSystemEventArgs.Name);
-                }
+            {
+                dirRemovedHandlers(fileSystemEventArgs.Name);
+            }
+            _globalSynLock.ExitReadLock();
         }
 
         private void FileWatcherOnCreated(object sender, FileSystemEventArgs fileSystemEventArgs)
         {
-            lock (_syncRoot)
-            {
-                OnFileAdded(fileSystemEventArgs.FullPath.ToLower());
-            }
+            _globalSynLock.EnterReadLock();
+            OnFileAdded(fileSystemEventArgs.FullPath.ToLower());
+            _globalSynLock.ExitReadLock();
         }
 
         private void OnFileAdded(string fullPath, bool addToLocalSet = true)
@@ -153,10 +158,10 @@ namespace FileIndexer.FileSystemManagement
 
         private void FileWatcherOnDeleted(object sender, FileSystemEventArgs fileSystemEventArgs)
         {
-            lock (_syncRoot)
-            {
-                OnFileDeleted(fileSystemEventArgs.FullPath);
-            }
+            _globalSynLock.EnterReadLock();
+            var path = ReplacePathIfChanged(fileSystemEventArgs.FullPath.ToLower());
+            OnFileDeleted(path);
+            _globalSynLock.ExitReadLock();
             
         }
 
@@ -175,24 +180,50 @@ namespace FileIndexer.FileSystemManagement
 
         private void FileWatcherOnChanged(object sender, FileSystemEventArgs fileSystemEventArgs)
         {
+            _globalSynLock.EnterReadLock();
             var changeHandlers = FileChanged;
             if (changeHandlers != null)
             {
-                var normalizedFilePath = fileSystemEventArgs.FullPath.ToLower();
-                lock (_syncRoot)
-                {
-                    changeHandlers(normalizedFilePath);
-                }
+                
+                var normalizedFilePath = ReplacePathIfChanged(fileSystemEventArgs.FullPath.ToLower());
+                changeHandlers(normalizedFilePath);
             }
+            _globalSynLock.ExitReadLock();
+        }
+
+        private string ReplacePathIfChanged(string originalPath)
+        {
+            var currentFolderPath = _directoryWatcher.Path.ToLower();
+            if (originalPath.StartsWith(currentFolderPath))
+                return originalPath;
+            return ReplacePath(originalPath, currentFolderPath);
+        }
+
+        private string ReplacePath(string originalPath, string updatedPathPart)
+        {
+            int diverseIndex = FindDiverseIndex(originalPath, updatedPathPart);
+            int replaceBorder = originalPath.IndexOf('\\', diverseIndex);
+            var result = replaceBorder >= 0 ? updatedPathPart + originalPath.Substring(replaceBorder) : updatedPathPart;
+            return result;
+        }
+
+        private int FindDiverseIndex(string str1, string str2)
+        {
+            for (int i = 0; i < str1.Length; i++)
+            {
+                if (str1[i] != str2[i])
+                    return i;
+            }
+            return -1;
         }
 
         private void FileWatcherOnRenamed(object sender, RenamedEventArgs renamedEventArgs)
         {
             
-            lock (_syncRoot)
-            {
-                OnFileRenamed(renamedEventArgs.OldFullPath, renamedEventArgs.FullPath);
-            }
+            _globalSynLock.EnterReadLock();
+            var path = ReplacePathIfChanged(renamedEventArgs.OldFullPath.ToLower());
+            OnFileRenamed(path, renamedEventArgs.FullPath);
+            _globalSynLock.ExitReadLock();
         }
 
         private void OnFileRenamed(string oldFullPath, string newFullPath)
@@ -206,6 +237,16 @@ namespace FileIndexer.FileSystemManagement
             {
                 renameHandlers(normalizedOldName, normalizedNewName);
             }
+        }
+    }
+
+    internal sealed class DirectoryObservationFactory
+    {
+        private readonly ReaderWriterLockSlim _globalSyncLock = new ReaderWriterLockSlim();
+
+        public DirectoryObservation Produce(string directoryPath)
+        {
+            return new DirectoryObservation(directoryPath, _globalSyncLock);
         }
     }
 }

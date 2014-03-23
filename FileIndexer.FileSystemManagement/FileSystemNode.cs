@@ -12,7 +12,9 @@ namespace FileIndexer.FileSystemManagement
         private string _name;
         private readonly Dictionary<string, FileSystemNode> _next = new Dictionary<string, FileSystemNode>();
         private string _parentLocation; // caches parent folder path
+
         private readonly DirectoryObservation _observation;
+        private readonly DirectoryObservationFactory _directoryObservationFactory;
 
         private FileSystemNode _parent;
 
@@ -21,9 +23,13 @@ namespace FileIndexer.FileSystemManagement
         private readonly FileFilter _filter;
 
 
-        public FileSystemNode(string name, FileSystemNode parent, bool monitorFolder)
+        public FileSystemNode(string name, bool monitorFolder) : this(name, null, monitorFolder, new DirectoryObservationFactory())
+        {}
+
+        public FileSystemNode(string name, FileSystemNode parent, bool monitorFolder, DirectoryObservationFactory directoryObservationFactory)
         {
-            _name = name;
+            _directoryObservationFactory = directoryObservationFactory;
+            _name = name.ToLower();
             if(parent != null)
                 parent.AddChild(this);
             _filter = new FileFilter {Enabled = !monitorFolder};
@@ -33,7 +39,7 @@ namespace FileIndexer.FileSystemManagement
 
             if (!string.IsNullOrEmpty(fullPath))
             {
-                _observation = new DirectoryObservation(fullPath);
+                _observation = _directoryObservationFactory.Produce(fullPath);
                 BindFileObservations();
                 _observation.ForceAdddEvent();
             }
@@ -51,7 +57,7 @@ namespace FileIndexer.FileSystemManagement
                 FileSystemNode result;
                 if (_next.TryGetValue(name, out result))
                     return result;
-                result = new FileSystemNode(name, this, false);
+                result = new FileSystemNode(name, this, false, _directoryObservationFactory);
                 return result;
             }
         }
@@ -109,14 +115,17 @@ namespace FileIndexer.FileSystemManagement
         {
             lock (_syncRoot)
             {
+                if(oldPath == newPath)
+                    return;
                 FileSystemNode renamed;
                 if (_next.TryGetValue(oldPath, out renamed) && !_next.ContainsKey(newPath))
                 {
-                    renamed._name = newPath;                   
-                    var oldName = Path.Combine(_parentLocation, _name, oldPath).ToLower();
-                    var newName = Path.Combine(_parentLocation, _name, newPath).ToLower();
+                    renamed._name = newPath;
+                    var oldName = _parentLocation + Path.DirectorySeparatorChar + _name + Path.DirectorySeparatorChar +
+                                  oldPath;
+                    var newName = _parentLocation + Path.DirectorySeparatorChar + _name + Path.DirectorySeparatorChar +
+                                  newPath;
                     renamed.PropagateName(oldName, newName);
-                    renamed._filter.UpdateFileNames(oldName, newName);
                     _next.Remove(oldPath);
                     _next.Add(newPath, renamed);
                     
@@ -133,7 +142,7 @@ namespace FileIndexer.FileSystemManagement
                 _parentLocation = BuildParentLocation();
                 RenameFiles(oldPath, newPath);
                 _filter.UpdateFileNames(oldPath, newPath);
-                children = _next.Values.ToArray(); // no, it's OK, really!
+                children = _next.Values.ToArray();
             }
 
             foreach (var node in children)

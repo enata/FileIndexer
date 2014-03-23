@@ -42,9 +42,6 @@ namespace FileIndexer.Tests.FileSystemManagament
             File.WriteAllText(_tmpFileName6, "uuu");
         }
 
-
-        // TODO: FileTree.Unhook()
-
         //[TestFixtureTearDown]
         //public void CleanUp()
         //{
@@ -204,19 +201,23 @@ namespace FileIndexer.Tests.FileSystemManagament
         }
 
         [Test]
-        public void FolderRenamedFileObservedTest()
+        public void AFolderRenamedFileObservedTest()
         {
             string path = null;
             var manualEvent = new ManualResetEvent(false);
             var fileTree = new FileTree();
+            var updatedFilePath = Path.Combine(Folder, @"tst\x\6.txt").ToLower();
             fileTree.FileChanged += changedPath =>
-            {
-                path = changedPath;
-                manualEvent.Set();
+                {
+                    if (changedPath == updatedFilePath)
+                    {
+                        path = changedPath;
+                        manualEvent.Set();
+                    }
             };
             string directoryToObserve = _rootDirectory;
             fileTree.AddDirectory(directoryToObserve);
-            var updatedFilePath = Path.Combine(Folder, @"tst\x\6.txt").ToLower();
+            
 
             Directory.Move(_tmpFolderPath4, Path.Combine(Folder, @"tst\x"));
             Thread.Sleep(200);
@@ -232,14 +233,14 @@ namespace FileIndexer.Tests.FileSystemManagament
             string changedFileName = null;
             var manualEvent = new ManualResetEvent(false);
             var fileTree = new FileTree();
+            string directoryToObserve = _rootDirectory;
+            string fileFullPath = _tmpFileName;
+            fileTree.AddDirectory(directoryToObserve);
             fileTree.FileChanged += path =>
             {
                 changedFileName = path;
                 manualEvent.Set();
             };
-            string directoryToObserve = _rootDirectory;
-            string fileFullPath = _tmpFileName;
-            fileTree.AddDirectory(directoryToObserve);
             fileTree.TryRemoveDirectory(directoryToObserve);
             File.AppendAllText(fileFullPath, "!");
 
